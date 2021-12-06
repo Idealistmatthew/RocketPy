@@ -461,9 +461,7 @@ class HybridMotor:
         def geometryDot(y, t):
             grainMassDot = self.massDot(t) / self.grainNumber
             rI, h = y
-            rIDot = (
-                -0.5 * grainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
-            )
+            rIDot = 0 # no inner radius in Liquid Rocket
             hDot = 1.0 * grainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
             return [rIDot, hDot]
 
@@ -610,15 +608,11 @@ class HybridMotor:
         )
 
         # Calculate inertia I dot for all grains
-        self.inertiaIDot = 0 # Assume to be zero for liquid rocket
+        self.inertiaIDot = grainNumber * grainInertiaI + grainMass * np.sum(d ** 2)
         self.inertiaIDot.setOutputs("Propellant Inertia I Dot (kg*m2/s)")
 
         # Inertia Z
-        self.inertiaZ = (
-            (1 / 2.0)
-            * self.mass
-            * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
-        )
+        self.inertiaZ = 0 # Assume zero for liquid rocket
         self.inertiaZ.setOutputs("Propellant Inertia Z (kg*m2)")
 
         # Inertia Z Dot
