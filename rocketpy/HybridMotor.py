@@ -113,6 +113,7 @@ class HybridMotor:
     def __init__(
         self,
         thrustSource,
+        massSource,
         burnOut,
         grainNumber,
         grainDensity,
@@ -140,6 +141,16 @@ class HybridMotor:
             specify time in seconds, while the second column specifies thrust.
             Arrays may also be specified, following rules set by the class
             Function. See help(Function). Thrust units are Newtons.
+        massSource : int, float, callable, string, array
+            Motor's mass curve. Can be given as an int or float, in which
+            case the thrust will be considered constant in time. It can
+            also be given as a callable function, whose argument is time in
+            seconds and returns the thrust supplied by the motor in the
+            instant. If a string is given, it must point to a .csv or .eng file.
+            The .csv file shall contain no headers and the first column must
+            specify time in seconds, while the second column specifies thrust.
+            Arrays may also be specified, following rules set by the class
+            Function. See help(Function). Mass units are in Kgs.
         burnOut : int, float
             Motor burn out time in seconds.
         grainNumber : int
@@ -208,6 +219,11 @@ class HybridMotor:
         self.thrust = Function(
             thrustSource, "Time (s)", "Thrust (N)", self.interpolate, "zero"
         )
+
+        self.mass = Function(
+            massSource, "Time (s)", "Mass (kg)", self.interpolate, "zero"
+        )
+
         if callable(thrustSource) or isinstance(thrustSource, (int, float)):
             self.thrust.setDiscrete(0, burnOut, 50, self.interpolate, "zero")
 
@@ -229,7 +245,6 @@ class HybridMotor:
         self.grainInitialHeight = grainInitialHeight
         # Other quantities that will be computed
         self.massDot = None
-        self.mass = None
         self.grainInnerRadius = None
         self.grainHeight = None
         self.burnArea = None
@@ -259,7 +274,6 @@ class HybridMotor:
         self.propellantInitialMass = self.grainNumber * self.grainInitialMass
         # Dynamic quantities
         self.evaluateMassDot()
-        self.evaluateMass()
         self.evaluateGeometry()
         self.evaluateInertia()
 
@@ -336,28 +350,10 @@ class HybridMotor:
         # Return total impulse
         return self.totalImpulse
 
-    @property
-    def exhaustVelocity(self):
-        """Calculates and returns exhaust velocity by assuming it
-        as a constant. The formula used is total impulse/propellant
-        initial mass. The value is also stored in
-        self.exhaustVelocity.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        self.exhaustVelocity : float
-            Constant gas exhaust velocity of the motor.
-        """
-        return self.totalImpulse / self.propellantInitialMass
-
     def evaluateMassDot(self):
         """Calculates and returns the time derivative of propellant
-        mass by assuming constant exhaust velocity. The formula used
-        is the opposite of thrust divided by exhaust velocity. The
+        mass by assuming nonconstant exhaust velocity.The values are 
+        obtained by differentiating the mass curve. The
         result is a function of time, object of the Function class,
         which is stored in self.massDot.
 
@@ -371,21 +367,39 @@ class HybridMotor:
             Time derivative of total propellant mas as a function
             of time.
         """
+        # Retrieve mass dot curve data
+        t = self.mass.source[:, 0]
+        y = self.mass.source[:, 1]
+
+        # Set initial conditions
+        T = [0]
+        ydot = [(y[1]-y[0])/(t[1]-t[0])]
+
+        # Solve for each time point
+        for i in range(1, len(t)-1):
+            T += [t[i]]
+            ydot += [(y[i]-y[i-1])/(t[i]-t[i-1])]
+
+
         # Create mass dot Function
-        self.massDot = self.thrust / (-self.exhaustVelocity)
+        self.massDot = Function(
+            np.concatenate(([T], [ydot])).transpose(),
+            "Time (s)",
+            "Propellant Total Mass Rate (kg s-1)",
+            self.interpolate,
+            "constant",
+        )
         self.massDot.setOutputs("Mass Dot (kg/s)")
         self.massDot.setExtrapolation("zero")
 
         # Return Function
         return self.massDot
-
-    def evaluateMass(self):
-        """Calculates and returns the total propellant mass curve by
-        numerically integrating the MassDot curve, calculated in
-        evaluateMassDot. Numerical integration is done with the
-        Trapezoidal Rule, given the same result as scipy.integrate.
-        odeint but 100x faster. The result is a function of time,
-        object of the class Function, which is stored in self.mass.
+    
+    @property
+    def exhaustVelocity(self):
+        """Calculates and returns  effective exhaust velocity by assuming it is not
+        constant. The formula used is thrust/ derivative of mass. The value is also stored in
+        self.exhaustVelocity.
 
         Parameters
         ----------
@@ -393,33 +407,10 @@ class HybridMotor:
 
         Returns
         -------
-        self.mass : Function
-            Total propellant mass as a function of time.
+        self.exhaustVelocity : float
+            Constant gas exhaust velocity of the motor.
         """
-        # Retrieve mass dot curve data
-        t = self.massDot.source[:, 0]
-        ydot = self.massDot.source[:, 1]
-
-        # Set initial conditions
-        T = [0]
-        y = [self.propellantInitialMass]
-
-        # Solve for each time point
-        for i in range(1, len(t)):
-            T += [t[i]]
-            y += [y[i - 1] + 0.5 * (t[i] - t[i - 1]) * (ydot[i] + ydot[i - 1])]
-
-        # Create Function
-        self.mass = Function(
-            np.concatenate(([T], [y])).transpose(),
-            "Time (s)",
-            "Propellant Total Mass (kg)",
-            self.interpolate,
-            "constant",
-        )
-
-        # Return Mass Function
-        return self.mass
+        return self.thrust / self.massDot
 
     @property
     def throatArea(self):
@@ -791,6 +782,7 @@ class HybridMotor:
             + "{:.3f}".format(self.propellantInitialMass)
             + " kg"
         )
+        ## Need to sort out a way to print average exhaust velocity?
         print(
             "Propellant Exhaust Velocity: "
             + "{:.3f}".format(self.exhaustVelocity)
@@ -811,6 +803,7 @@ class HybridMotor:
         self.thrust()
         self.mass()
         self.massDot()
+        self.exhaustVelocity()
         self.grainInnerRadius()
         self.grainHeight()
         self.burnRate()
