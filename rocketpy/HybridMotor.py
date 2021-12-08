@@ -140,6 +140,7 @@ class HybridMotor:
         tankInertiaI,
         tankInertiaZ,
         grainSeparation=0,
+        LiquidgrainSeparation=0,
         nozzleRadius=0.0335,
         throatRadius=0.0114,
         reshapeThrustCurve=False,
@@ -187,7 +188,14 @@ class HybridMotor:
         grainInitialHeight : int, float
             Solid grain initial height in meters.
         grainSeparation : int, float, optional
-            Distance between grains, in meters. Default is 0.
+            Distance between grains (in this implementation
+            it is the distance between the solid
+            grain and the center of propellant mass), in meters. Default is 0.
+        LiquidgrainSeparation : int, float, optional
+            Distance between grains(
+                In this implementation it is the distance between the liquid gain 
+                and the propellant center of mass
+            ), in meters. Default is 0.
         nozzleRadius : int, float, optional
             Motor's nozzle outlet radius in meters. Used to calculate Kn curve.
             Optional if the Kn curve is not interesting. Its value does not impact
@@ -263,6 +271,7 @@ class HybridMotor:
         self.grainNumber = grainNumber
         self.LiquidgrainNumber = LiquidgrainNumber
         self.grainSeparation = grainSeparation
+        self.LiquidgrainSeparation = LiquidgrainSeparation
         self.grainDensity = grainDensity
         self.LiquidgrainDensity = LiquidgrainDensity
         self.grainOuterRadius = grainOuterRadius
@@ -274,6 +283,7 @@ class HybridMotor:
         self.tankInertiaZ = tankInertiaZ
         # Other quantities that will be computed
         self.massDot = None
+        self.exhaustVelocity = None
         self.grainInnerRadius = None
         self.grainHeight = None
         self.LiquidgrainHeight = None
@@ -313,6 +323,8 @@ class HybridMotor:
         self.evaluateInertia()
         self.evaluateLiquidInertia()
         self.evaluateTotalInertia()
+
+        self.maxExhaustVelocity = np.amax(self.exhaustVelocity.source[:, 1])
 
     def reshapeThrustCurve(
         self, burnTime, totalImpulse, oldTotalImpulse=None, startAtZero=True
@@ -447,7 +459,8 @@ class HybridMotor:
         self.exhaustVelocity : float
             Constant gas exhaust velocity of the motor.
         """
-        return self.thrust / self.massDot
+        self.exhaustVelocity = self.thrust / self.massDot
+        return self.exhaustVelocity
 
     @property
     def throatArea(self):
@@ -629,7 +642,7 @@ class HybridMotor:
         burnRate : Function
         Rate of progression of the inner radius during the combustion.
         """
-        self.burnRate = (-1) * self.massDot / (self.burnArea * self.grainDensity)
+        self.burnRate = (-1) * self.massDot / (self.burnArea * self.grainDensity)*2
         self.burnRate.setOutputs("Burn Rate (m/s)")
         return self.burnRate
 
@@ -684,9 +697,7 @@ class HybridMotor:
         )
 
         # Calculate each grain's distance d to propellant center of mass
-        initialValue = (grainNumber - 1) / 2
-        d = np.linspace(-initialValue, initialValue, grainNumber)
-        d = d * (self.grainInitialHeight + self.grainSeparation)
+        d = self.grainSeparation
 
         # Calculate inertia for all grains
         self.inertiaI = grainNumber * grainInertiaI + grainMass * np.sum(d ** 2)
@@ -760,40 +771,38 @@ class HybridMotor:
         )
 
         # Calculate each grain's distance d to propellant center of mass ?
-        initialValue = (totalgrainNumber - 1) / 2
-        d = np.linspace(-initialValue, initialValue, LiquidgrainNumber)
-        d = d * (self.grainInitialHeight + self.grainSeparation)
+        d = self.LiquidgrainSeparation
 
         # Calculate inertia for all grains
-        self.inertiaI = 0 # Assume to be zero for liquid rocket
-        self.inertiaI.setOutputs("Propellant Inertia I (kg*m2)")
+        self.LiquidinertiaI = 0 # Assume to be zero for liquid rocket
+        self.LiquidinertiaI.setOutputs("Propellant Inertia I (kg*m2)")
 
         # Inertia I Dot
         # Calculate each grain's inertia I dot
-        grainInertiaIDot = (
-            grainMassDot
+        LiquidgrainInertiaIDot = (
+            LiquidgrainMassDot
             * (
-                (1 / 4) * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
-                + (1 / 12) * self.grainHeight ** 2
+                (1 / 4) * (self.LiquidgrainOuterRadius ** 2)
+                + (1 / 12) * self.LiquidgrainHeight ** 2
             )
-            + grainMass
-            * ((1 / 2) * self.grainInnerRadius - (1 / 3) * self.grainHeight)
+            + LiquidgrainMass
+            * (-(1 / 3) * self.LiquidgrainHeight)
             * self.burnRate
         )
 
         # Calculate inertia I dot for all grains
-        self.inertiaIDot = grainNumber * grainInertiaI + grainMass * np.sum(d ** 2)
-        self.inertiaIDot.setOutputs("Propellant Inertia I Dot (kg*m2/s)")
+        self.LiquidinertiaIDot = LiquidgrainNumber * LiquidgrainInertiaI + LiquidgrainMass * np.sum(d ** 2)
+        self.LiquidinertiaIDot.setOutputs("Propellant Inertia I Dot (kg*m2/s)")
 
         # Inertia Z
-        self.inertiaZ = 0 # Assume zero for liquid rocket
-        self.inertiaZ.setOutputs("Propellant Inertia Z (kg*m2)")
+        self.LiquidinertiaZ = 0 # Assume zero for liquid rocket
+        self.LiquidinertiaZ.setOutputs("Propellant Inertia Z (kg*m2)")
 
         # Inertia Z Dot
-        self.inertiaZDot = (1 / 2.0) * self.massDot * (
-            self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2
-        ) + self.mass * self.grainInnerRadius * self.burnRate
-        self.inertiaZDot.setOutputs("Propellant Inertia Z Dot (kg*m2/s)")
+        self.LiquidinertiaZDot = (1 / 2.0) * self.LiquidmassDot * (
+            self.LiquidgrainOuterRadius ** 2 + self.LiquidgrainInnerRadius ** 2
+        )
+        self.LiquidinertiaZDot.setOutputs("Propellant Inertia Z Dot (kg*m2/s)")
 
         return [self.LiquidinertiaI, self.LiquidinertiaZ]
 
@@ -930,8 +939,8 @@ class HybridMotor:
             + " kg"
         )
         print(
-            "Propellant Exhaust Velocity: "
-            + "{:.3f}".format(self.exhaustVelocity)
+            "Propellant Maximum Exhaust Velocity: "
+            + "{:.3f}".format(self.maxExhaustVelocity)
             + " m/s"
         )
         print("Average Thrust: " + "{:.3f}".format(self.averageThrust) + " N")
