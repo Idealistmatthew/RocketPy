@@ -137,6 +137,8 @@ class HybridMotor:
         grainInitialInnerRadius,
         grainInitialHeight,
         LiquidgrainInitialHeight,
+        tankInertiaI,
+        tankInertiaZ,
         grainSeparation=0,
         nozzleRadius=0.0335,
         throatRadius=0.0114,
@@ -268,6 +270,8 @@ class HybridMotor:
         self.grainInitialInnerRadius = grainInitialInnerRadius
         self.grainInitialHeight = grainInitialHeight
         self.LiquidgrainInitialHeight = LiquidgrainInitialHeight
+        self.tankInertiaI = tankInertiaI
+        self.tankInertiaZ = tankInertiaZ
         # Other quantities that will be computed
         self.massDot = None
         self.grainInnerRadius = None
@@ -307,6 +311,8 @@ class HybridMotor:
         self.evaluateGeometry()
         self.evaluateLiquidGeometry()
         self.evaluateInertia()
+        self.evaluateLiquidInertia()
+        self.evaluateTotalInertia()
 
     def reshapeThrustCurve(
         self, burnTime, totalImpulse, oldTotalImpulse=None, startAtZero=True
@@ -744,17 +750,18 @@ class HybridMotor:
 
         # Inertia I
         # Calculate inertia I for each grain
-        grainMass = self.mass / self.grainNumber
-        grainMassDot = self.massDot / self.grainNumber
-        grainNumber = self.grainNumber
-        grainInertiaI = grainMass * (
-            (1 / 4) * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
-            + (1 / 12) * self.grainHeight ** 2
+        LiquidgrainMass = self.mass / (self.grainNumber + self.LiquidgrainNumber)
+        LiquidgrainMassDot = self.massDot / (self.grainNumber + self.LiquidgrainNumber)
+        LiquidgrainNumber = self.LiquidgrainNumber
+        totalgrainNumber = self.LiquidgrainNumber + self.grainNumber
+        LiquidgrainInertiaI = LiquidgrainMass * (
+            (1 / 4) * (self.LiquidgrainOuterRadius ** 2)
+            + (1 / 12) * self.LiquidgrainHeight ** 2
         )
 
-        # Calculate each grain's distance d to propellant center of mass
-        initialValue = (grainNumber - 1) / 2
-        d = np.linspace(-initialValue, initialValue, grainNumber)
+        # Calculate each grain's distance d to propellant center of mass ?
+        initialValue = (totalgrainNumber - 1) / 2
+        d = np.linspace(-initialValue, initialValue, LiquidgrainNumber)
         d = d * (self.grainInitialHeight + self.grainSeparation)
 
         # Calculate inertia for all grains
@@ -789,14 +796,8 @@ class HybridMotor:
         self.inertiaZDot.setOutputs("Propellant Inertia Z Dot (kg*m2/s)")
 
         return [self.LiquidinertiaI, self.LiquidinertiaZ]
-    
-    def evaluatetankInertia(self):
-        """
-        Function that evaluates the inertia of the liquid grain tanks
-        """
-        return [self.tankinertiaI, self.tankinertiaZ]
 
-    def evaluatetotalInertia(self):
+    def evaluateTotalInertia(self):
         """
         Summing up the individual components of the inertia to evaluate the total inertia of the hybrid motor
 
@@ -813,7 +814,7 @@ class HybridMotor:
         """
         self.totalinertiaI = self.inertiaI + self.LiquidinertiaI + self.tanksinertiaI
         self.totalinertiaZ = self.inertiaZ + self.LiquidinertiaZ + self.tanksinertiaZ
-        return [self.totalinertiaI, self.totalinertiaZ]]
+        return [self.totalinertiaI, self.totalinertiaZ]
 
 
     def importEng(self, fileName):
