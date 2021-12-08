@@ -37,10 +37,14 @@ class HybridMotor:
             Radius of motor nozzle throat in meters.
         Motor.grainNumber : int
             Number of solid grains.
+        Motor.LiquidgrainNumber : int
+            Number of liquid grains.
         Motor.grainSeparation : float
             Distance between two grains in meters.
         Motor.grainDensity : float
-            Density of each grain in kg/meters cubed.
+            Density of each solid grain in kg/meters cubed.
+        Motor.LiquidgrainDensity: float
+            Density of each liquid grain in kg/meters cubed.
         Motor.grainOuterRadius : float
             Outer radius of each grain in meters.
         Motor.grainInitialInnerRadius : float
@@ -117,6 +121,8 @@ class HybridMotor:
         burnOut,
         grainNumber,
         grainDensity,
+        LiquidgrainNumber,
+        LiquidgrainDensity,
         grainOuterRadius,
         grainInitialInnerRadius,
         grainInitialHeight,
@@ -155,8 +161,12 @@ class HybridMotor:
             Motor burn out time in seconds.
         grainNumber : int
             Number of solid grains
+        LiquidgrainNumber: int
+            Number of liquid grains
         grainDensity : int, float
             Solid grain density in kg/m3.
+        LiquidgrainDensity: int, float
+            Liquid grain density in kg/m3.
         grainOuterRadius : int, float
             Solid grain outer radius in meters.
         grainInitialInnerRadius : int, float
@@ -238,8 +248,10 @@ class HybridMotor:
         self.nozzleRadius = nozzleRadius
         self.throatRadius = throatRadius
         self.grainNumber = grainNumber
+        self.LiquidgrainNumber = LiquidgrainNumber
         self.grainSeparation = grainSeparation
         self.grainDensity = grainDensity
+        self.LiquidgrainDensity = LiquidgrainDensity
         self.grainOuterRadius = grainOuterRadius
         self.grainInitialInnerRadius = grainInitialInnerRadius
         self.grainInitialHeight = grainInitialHeight
