@@ -47,16 +47,25 @@ class HybridMotor:
             Density of each liquid grain in kg/meters cubed.
         Motor.grainOuterRadius : float
             Outer radius of each grain in meters.
+        Motor.LiquidgrainOuterRadius: float
+            Outer radius of each liquid grain in meters.
         Motor.grainInitialInnerRadius : float
             Initial inner radius of each grain in meters.
         Motor.grainInitialHeight : float
             Initial height of each grain in meters.
+        Motor.LiquidgrainInitialHeight: float
+            Initial height of each liquid grain in meters.
         Motor.grainInitialVolume : float
             Initial volume of each grain in meters cubed.
+        Motor.LiquidgrainInitialVolume: float
+            Initial volume of each liquid grain in meters cubed.
         Motor.grainInnerRadius : Function
             Inner radius of each grain in meters as a function of time.
+        # liquid grain inner radius is zero so will be ignored
         Motor.grainHeight : Function
-            Height of each grain in meters as a function of time.
+            Height of each solid grain in meters as a function of time.
+        Motor.LiquidgrainHeight: Function
+            Height of each liquid grain in meters as a function of time.
 
         Mass and moment of inertia attributes:
         Motor.grainInitialMass : float
@@ -124,8 +133,10 @@ class HybridMotor:
         LiquidgrainNumber,
         LiquidgrainDensity,
         grainOuterRadius,
+        LiquidgrainOuterRadius,
         grainInitialInnerRadius,
         grainInitialHeight,
+        LiquidgrainInitialHeight,
         grainSeparation=0,
         nozzleRadius=0.0335,
         throatRadius=0.0114,
@@ -253,19 +264,26 @@ class HybridMotor:
         self.grainDensity = grainDensity
         self.LiquidgrainDensity = LiquidgrainDensity
         self.grainOuterRadius = grainOuterRadius
+        self.LiquidgrainOuterRadius = LiquidgrainOuterRadius
         self.grainInitialInnerRadius = grainInitialInnerRadius
         self.grainInitialHeight = grainInitialHeight
+        self.LiquidgrainInitialHeight = LiquidgrainInitialHeight
         # Other quantities that will be computed
         self.massDot = None
         self.grainInnerRadius = None
         self.grainHeight = None
+        self.LiquidgrainHeight = None
         self.burnArea = None
         self.Kn = None
         self.burnRate = None
         self.inertiaI = None
+        self.LiquidinertiaI = None
         self.inertiaIDot = None
+        self.LiquidinertiaIDot = None
         self.inertiaZ = None
+        self.LiquidinertiaZ = None
         self.inertiaZDot = None
+        self.LiquidinertiaZDot = None
         self.maxThrust = None
         self.maxThrustTime = None
         self.averageThrust = None
@@ -287,6 +305,7 @@ class HybridMotor:
         # Dynamic quantities
         self.evaluateMassDot()
         self.evaluateGeometry()
+        self.evaluateLiquidGeometry()
         self.evaluateInertia()
 
     def reshapeThrustCurve(
@@ -464,6 +483,75 @@ class HybridMotor:
         def geometryDot(y, t):
             grainMassDot = self.massDot(t) / self.grainNumber
             rI, h = y
+            rIDot = (
+                -0.5 * grainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
+            )
+            hDot = 1.0 * grainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
+            return [rIDot, hDot]
+
+        # Solve the system of differential equations
+        sol = integrate.odeint(geometryDot, y0, t)
+
+        # Write down functions for innerRadius and height
+        self.grainInnerRadius = Function(
+            np.concatenate(([t], [sol[:, 0]])).transpose().tolist(),
+            "Time (s)",
+            "Grain Inner Radius (m)",
+            self.interpolate,
+            "constant",
+        )
+        self.grainHeight = Function(
+            np.concatenate(([t], [sol[:, 1]])).transpose().tolist(),
+            "Time (s)",
+            "Grain Height (m)",
+            self.interpolate,
+            "constant",
+        )
+
+        # Create functions describing burn rate, Kn and burn area
+        self.evaluateBurnArea()
+        self.evaluateKn()
+        self.evaluateBurnRate()
+
+        return [self.grainInnerRadius, self.grainHeight]
+
+    def evaluateLiquidGeometry(self):
+        """Calculates grain inner radius and grain height as a
+        function of time by assuming that every propellant mass
+        burnt is exhausted. In order to do that, a system of
+        differential equations is solved using scipy.integrate.
+        odeint. Furthermore, the function calculates burn area,
+        burn rate and Kn as a function of time using the previous
+        results. All functions are stored as objects of the class
+        Function in self.grainInnerRadius, self.grainHeight, self.
+        burnArea, self.burnRate and self.Kn.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        geometry : list of Functions
+            First element is the Function representing the inner
+            radius of a grain as a function of time. Second
+            argument is the Function representing the height of a
+            grain as a function of time.
+        """
+        # Define initial conditions for integration
+        y0 = [0, self.LiquidgrainInitialHeight]
+
+        # Define time mesh
+        t = self.massDot.source[:, 0]
+
+        density = self.LiquidgrainDensity
+        rO = self.LiquidgrainOuterRadius
+
+        # Define system of differential equations
+        def geometryDot(y, t):
+            # assume both grains burn at the same rate for now
+            grainMassDot = self.massDot(t) / self.grainNumber
+            rI, h = y
             rIDot = 0 # no inner radius in Liquid Rocket
             hDot = 1.0 * grainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
             return [rIDot, hDot]
@@ -557,8 +645,84 @@ class HybridMotor:
         )
         return self.Kn
 
+    
     def evaluateInertia(self):
         """Calculates propellant inertia I, relative to directions
+        perpendicular to the rocket body axis and its time derivative
+        as a function of time. Also calculates propellant inertia Z,
+        relative to the axial direction, and its time derivative as a
+        function of time. Products of inertia are assumed null due to
+        symmetry. The four functions are stored as an object of the
+        Function class.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list of Functions
+            The first argument is the Function representing inertia I,
+            while the second argument is the Function representing
+            inertia Z.
+        """
+
+        # Inertia I
+        # Calculate inertia I for each grain
+        grainMass = self.mass / self.grainNumber
+        grainMassDot = self.massDot / self.grainNumber
+        grainNumber = self.grainNumber
+        grainInertiaI = grainMass * (
+            (1 / 4) * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
+            + (1 / 12) * self.grainHeight ** 2
+        )
+
+        # Calculate each grain's distance d to propellant center of mass
+        initialValue = (grainNumber - 1) / 2
+        d = np.linspace(-initialValue, initialValue, grainNumber)
+        d = d * (self.grainInitialHeight + self.grainSeparation)
+
+        # Calculate inertia for all grains
+        self.inertiaI = grainNumber * grainInertiaI + grainMass * np.sum(d ** 2)
+        self.inertiaI.setOutputs("Propellant Inertia I (kg*m2)")
+
+        # Inertia I Dot
+        # Calculate each grain's inertia I dot
+        grainInertiaIDot = (
+            grainMassDot
+            * (
+                (1 / 4) * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
+                + (1 / 12) * self.grainHeight ** 2
+            )
+            + grainMass
+            * ((1 / 2) * self.grainInnerRadius - (1 / 3) * self.grainHeight)
+            * self.burnRate
+        )
+
+        # Calculate inertia I dot for all grains
+        self.inertiaIDot = grainNumber * grainInertiaIDot + grainMassDot * np.sum(
+            d ** 2
+        )
+        self.inertiaIDot.setOutputs("Propellant Inertia I Dot (kg*m2/s)")
+
+        # Inertia Z
+        self.inertiaZ = (
+            (1 / 2.0)
+            * self.mass
+            * (self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2)
+        )
+        self.inertiaZ.setOutputs("Propellant Inertia Z (kg*m2)")
+
+        # Inertia Z Dot
+        self.inertiaZDot = (1 / 2.0) * self.massDot * (
+            self.grainOuterRadius ** 2 + self.grainInnerRadius ** 2
+        ) + self.mass * self.grainInnerRadius * self.burnRate
+        self.inertiaZDot.setOutputs("Propellant Inertia Z Dot (kg*m2/s)")
+
+        return [self.inertiaI, self.inertiaZ]
+
+    def evaluateLiquidInertia(self):
+        """Calculates liquid propellant inertia I, relative to directions
         perpendicular to the rocket body axis and its time derivative
         as a function of time. Also calculates propellant inertia Z,
         relative to the axial direction, and its time derivative as a
@@ -624,7 +788,33 @@ class HybridMotor:
         ) + self.mass * self.grainInnerRadius * self.burnRate
         self.inertiaZDot.setOutputs("Propellant Inertia Z Dot (kg*m2/s)")
 
-        return [self.inertiaI, self.inertiaZ]
+        return [self.LiquidinertiaI, self.LiquidinertiaZ]
+    
+    def evaluatetankInertia(self):
+        """
+        Function that evaluates the inertia of the liquid grain tanks
+        """
+        return [self.tankinertiaI, self.tankinertiaZ]
+
+    def evaluatetotalInertia(self):
+        """
+        Summing up the individual components of the inertia to evaluate the total inertia of the hybrid motor
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list of Functions
+            The first argument is the Function representing total inertia I,
+            while the second argument is the Function representing total
+            inertia Z.
+        """
+        self.totalinertiaI = self.inertiaI + self.LiquidinertiaI + self.tanksinertiaI
+        self.totalinertiaZ = self.inertiaZ + self.LiquidinertiaZ + self.tanksinertiaZ
+        return [self.totalinertiaI, self.totalinertiaZ]]
+
 
     def importEng(self, fileName):
         """Read content from .eng file and process it, in order to
