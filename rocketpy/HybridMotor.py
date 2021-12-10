@@ -127,6 +127,7 @@ class HybridMotor:
         self,
         thrustSource,
         massSource,
+        LiquidmassSource,
         burnOut,
         grainNumber,
         grainDensity,
@@ -162,7 +163,17 @@ class HybridMotor:
             Arrays may also be specified, following rules set by the class
             Function. See help(Function). Thrust units are Newtons.
         massSource : int, float, callable, string, array
-            Motor's mass curve. Can be given as an int or float, in which
+            Motor's solid mass curve. Can be given as an int or float, in which
+            case the thrust will be considered constant in time. It can
+            also be given as a callable function, whose argument is time in
+            seconds and returns the thrust supplied by the motor in the
+            instant. If a string is given, it must point to a .csv or .eng file.
+            The .csv file shall contain no headers and the first column must
+            specify time in seconds, while the second column specifies thrust.
+            Arrays may also be specified, following rules set by the class
+            Function. See help(Function). Mass units are in Kgs.
+        LiquidmassSource : int, float, callable, string, array
+            Motor's liquid mass curve. Can be given as an int or float, in which
             case the thrust will be considered constant in time. It can
             also be given as a callable function, whose argument is time in
             seconds and returns the thrust supplied by the motor in the
@@ -253,6 +264,9 @@ class HybridMotor:
 
         self.mass = Function(
             massSource, "Time (s)", "Mass (kg)", self.interpolate, "zero"
+        )
+        self.Liquidmass = Function(
+            LiquidmassSource, "Time (s)", "Liquid Mass (kg)", self.interpolate, "zero"
         )
 
         if callable(thrustSource) or isinstance(thrustSource, (int, float)):
@@ -400,7 +414,7 @@ class HybridMotor:
         return self.totalImpulse
 
     def evaluateMassDot(self):
-        """Calculates and returns the time derivative of propellant
+        """Calculates and returns the time derivative of solid propellant
         mass by assuming nonconstant exhaust velocity.The values are 
         obtained by differentiating the mass curve. The
         result is a function of time, object of the Function class,
@@ -443,6 +457,51 @@ class HybridMotor:
 
         # Return Function
         return self.massDot
+
+    def evaluateLiquidMassDot(self):
+        """Calculates and returns the time derivative of solid propellant
+        mass by assuming nonconstant exhaust velocity.The values are 
+        obtained by differentiating the mass curve. The
+        result is a function of time, object of the Function class,
+        which is stored in self.massDot.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        self.massDot : Function
+            Time derivative of total propellant mas as a function
+            of time.
+        """
+        # Retrieve mass dot curve data
+        t = self.Liquidmass.source[:, 0]
+        y = self.Liquidmass.source[:, 1]
+
+        # Set initial conditions
+        T = [0]
+        ydot = [(y[1]-y[0])/(t[1]-t[0])]
+
+        # Solve for each time point
+        for i in range(1, len(t)-1):
+            T += [t[i]]
+            ydot += [(y[i]-y[i-1])/(t[i]-t[i-1])]
+
+
+        # Create mass dot Function
+        self.LiquidmassDot = Function(
+            np.concatenate(([T], [ydot])).transpose(),
+            "Time (s)",
+            "Propellant Total Mass Rate (kg s-1)",
+            self.interpolate,
+            "constant",
+        )
+        self.LiquidmassDot.setOutputs("Mass Dot (kg/s)")
+        self.LiquidmassDot.setExtrapolation("zero")
+
+        # Return Function
+        return self.LiquidmassDot
     
     @property
     def exhaustVelocity(self):
@@ -459,7 +518,7 @@ class HybridMotor:
         self.exhaustVelocity : float
             Constant gas exhaust velocity of the motor.
         """
-        self.exhaustVelocity = self.thrust / self.massDot
+        self.exhaustVelocity = self.thrust / (self.massDot + self.LiquidmassDot)
         return self.exhaustVelocity
 
     @property
@@ -561,7 +620,7 @@ class HybridMotor:
         y0 = [0, self.LiquidgrainInitialHeight]
 
         # Define time mesh
-        t = self.massDot.source[:, 0]
+        t = self.LiquidmassDot.source[:, 0]
 
         density = self.LiquidgrainDensity
         rO = self.LiquidgrainOuterRadius
@@ -569,10 +628,10 @@ class HybridMotor:
         # Define system of differential equations
         def geometryDot(y, t):
             # assume both grains burn at the same rate for now
-            grainMassDot = self.massDot(t) / self.grainNumber
+            LiquidgrainMassDot = self.LiquidmassDot(t) / self.grainNumber
             rI, h = y
             rIDot = 0 # no inner radius in Liquid Rocket
-            hDot = 1.0 * grainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
+            hDot = 1.0 * LiquidgrainMassDot / (density * np.pi * (rO ** 2 - rI ** 2 + rI * h))
             return [rIDot, hDot]
 
         # Solve the system of differential equations
@@ -582,22 +641,22 @@ class HybridMotor:
         self.grainInnerRadius = Function(
             np.concatenate(([t], [sol[:, 0]])).transpose().tolist(),
             "Time (s)",
-            "Grain Inner Radius (m)",
+            "Liquid Grain Inner Radius (m)",
             self.interpolate,
             "constant",
         )
         self.grainHeight = Function(
             np.concatenate(([t], [sol[:, 1]])).transpose().tolist(),
             "Time (s)",
-            "Grain Height (m)",
+            "Liquid Grain Height (m)",
             self.interpolate,
             "constant",
         )
 
         # Create functions describing burn rate, Kn and burn area
-        self.evaluateBurnArea()
+        self.evaluateLiquidBurnArea()
         self.evaluateKn()
-        self.evaluateBurnRate()
+        self.evaluateLiquidBurnRate()
 
         return [self.grainInnerRadius, self.grainHeight]
 
@@ -627,6 +686,31 @@ class HybridMotor:
         )
         self.burnArea.setOutputs("Burn Area (m2)")
         return self.burnArea
+    
+    def evaluateLiquidBurnArea(self):
+        """Calculates the BurnArea of the grain for
+        each time. Assuming that the grains are cylindrical
+        BATES grains.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        burnArea : Function
+        Function representing the burn area progression with the time.
+        """
+        self.LiquidburnArea = (
+            2
+            * np.pi
+            * (
+                self.LiquidgrainOuterRadius ** 2
+            )
+            * self.LiquidgrainNumber
+        )
+        self.LiquidburnArea.setOutputs("Liquid Burn Area (m2)")
+        return self.LiquidburnArea
 
     def evaluateBurnRate(self):
         """Calculates the BurnRate with respect to time.
@@ -645,6 +729,24 @@ class HybridMotor:
         self.burnRate = (-1) * self.massDot / (self.burnArea * self.grainDensity)*2
         self.burnRate.setOutputs("Burn Rate (m/s)")
         return self.burnRate
+    
+    def evaluateLiquidBurnRate(self):
+        """Calculates the BurnRate with respect to time.
+        This evaluation assumes that it was already
+        calculated the massDot, burnArea timeseries.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        burnRate : Function
+        Rate of progression of the inner radius during the combustion.
+        """
+        self.LiquidburnRate = (-1) * self.LiquidmassDot / (self.LiquidburnArea)*2
+        self.LiquidburnRate.setOutputs("Burn Rate (m/s)")
+        return self.LiquidburnRate
 
     def evaluateKn(self):
         KnSource = (
@@ -697,7 +799,7 @@ class HybridMotor:
         )
 
         # Calculate each grain's distance d to propellant center of mass
-        d = self.grainSeparation
+        d = 0
 
         # Calculate inertia for all grains
         self.inertiaI = grainNumber * grainInertiaI + grainMass * np.sum(d ** 2)
@@ -771,7 +873,7 @@ class HybridMotor:
         )
 
         # Calculate each grain's distance d to propellant center of mass ?
-        d = self.LiquidgrainSeparation
+        d = 0
 
         # Calculate inertia for all grains
         self.LiquidinertiaI = 0 # Assume to be zero for liquid rocket
